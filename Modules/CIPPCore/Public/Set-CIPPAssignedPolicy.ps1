@@ -1,83 +1,120 @@
 function Set-CIPPAssignedPolicy {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         $GroupName,
+        $ExcludeGroup,
         $PolicyId,
         $Type,
         $TenantFilter,
-        $APIName = "Assign Application",
-        $ExecutingUser
+        $PlatformType = 'deviceManagement',
+        $APIName = 'Assign Policy',
+        $Headers
     )
 
-    try { 
-        $assignmentsObject = switch ($GroupName) {
-            "allLicensedUsers" {
-                @(
+    Write-Host "Assigning policy $PolicyId ($PlatformType/$Type) to $GroupName"
+
+    try {
+        $assignmentsList = New-Object System.Collections.Generic.List[System.Object]
+        switch ($GroupName) {
+            'allLicensedUsers' {
+                $assignmentsList.Add(
                     @{
-                        id     = ""
                         target = @{
-                            "@odata.type" = "#microsoft.graph.allLicensedUsersAssignmentTarget"
+                            '@odata.type' = '#microsoft.graph.allLicensedUsersAssignmentTarget'
                         }
                     }
                 )
-                break 
             }
-            "AllDevices" {
-                @(
+            'AllDevices' {
+                $assignmentsList.Add(
                     @{
-                        id     = ""
                         target = @{
-                            "@odata.type" = "#microsoft.graph.allDevicesAssignmentTarget"
+                            '@odata.type' = '#microsoft.graph.allDevicesAssignmentTarget'
                         }
                     }
                 )
-                break 
             }
-            "AllDevicesAndUsers" { 
-                @(
+            'AllDevicesAndUsers' {
+                $assignmentsList.Add(
                     @{
-                        id     = ""
                         target = @{
-                            "@odata.type" = "#microsoft.graph.allDevicesAssignmentTarget"
+                            '@odata.type' = '#microsoft.graph.allDevicesAssignmentTarget'
                         }
-                    },
+                    }
+                )
+                $assignmentsList.Add(
                     @{
-                        id     = ""
                         target = @{
-                            "@odata.type" = "#microsoft.graph.allLicensedUsersAssignmentTarget"
+                            '@odata.type' = '#microsoft.graph.allLicensedUsersAssignmentTarget'
                         }
                     }
                 )
             }
             default {
-                $GroupNames = $GroupName.Split(",")
-                $GroupIds = New-GraphGetRequest -uri "https://graph.microsoft.com/beta/groups" -tenantid $TenantFilter | ForEach-Object { 
-                    $Group = $_
-                    foreach ($SingleName in $GroupNames) {
-                        if ($_.displayname -like $SingleName) {
-                            $group.id
+                Write-Host "We're supposed to assign a custom group. The group is $GroupName"
+                $GroupNames = $GroupName.Split(',').Trim()
+                $GroupIds = New-GraphGetRequest -uri 'https://graph.microsoft.com/beta/groups?$select=id,displayName&$top=999' -tenantid $TenantFilter |
+                    ForEach-Object {
+                        foreach ($SingleName in $GroupNames) {
+                            if ($_.displayName -like $SingleName) {
+                                $_.id
+                            }
                         }
                     }
-                }
-                foreach ($Group in $GroupIds) {
-                    @{
-                        target = @{
-                            "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                            groupId       = $Group
+                foreach ($gid in $GroupIds) {
+                    $assignmentsList.Add(
+                        @{
+                            target = @{
+                                '@odata.type' = '#microsoft.graph.groupAssignmentTarget'
+                                groupId       = $gid
+                            }
                         }
-                    }
+                    )
                 }
             }
         }
-        $assignmentsObject = [PSCustomObject]@{
-            assignments = @($assignmentsObject)
+        if ($ExcludeGroup) {
+            Write-Host "We're supposed to exclude a custom group. The group is $ExcludeGroup"
+            $ExcludeGroupNames = $ExcludeGroup.Split(',').Trim()
+            $ExcludeGroupIds = New-GraphGetRequest -uri 'https://graph.microsoft.com/beta/groups?$select=id,displayName&$top=999' -tenantid $TenantFilter |
+                ForEach-Object {
+                    foreach ($SingleName in $ExcludeGroupNames) {
+                        if ($_.displayName -like $SingleName) {
+                            $_.id
+                        }
+                    }
+                }
+
+            foreach ($egid in $ExcludeGroupIds) {
+                $assignmentsList.Add(
+                    @{
+                        target = @{
+                            '@odata.type' = '#microsoft.graph.exclusionGroupAssignmentTarget'
+                            groupId       = $egid
+                        }
+                    }
+                )
+            }
         }
-        $assign = New-GraphPOSTRequest -uri  "https://graph.microsoft.com/beta/deviceManagement/$Type('$($PolicyId)')/assign" -tenantid $tenantFilter -type POST -body ($assignmentsObject | ConvertTo-Json -Depth 10)
-        Write-LogMessage -user $ExecutingUser -API $APIName -message "Assigned Policy to $($GroupName)" -Sev "Info" -tenant $TenantFilter
-        return "Assigned policy to $($GroupName)"
-    }
-    catch {
-        Write-LogMessage -user $ExecutingUser -API $APIName -message "Failed to assign Policy to $GroupName" -Sev "Error" -tenant $TenantFilter
-        return "Could not assign policy to $GroupName. Error: $($_.Exception.Message)"
+
+        $assignmentsObject = [PSCustomObject]@{
+            assignments = $assignmentsList
+        }
+
+        $AssignJSON = $assignmentsObject | ConvertTo-Json -Depth 10 -Compress
+        Write-Host "AssignJSON: $AssignJSON"
+        if ($PSCmdlet.ShouldProcess($GroupName, "Assigning policy $PolicyId")) {
+            $uri = "https://graph.microsoft.com/beta/$($PlatformType)/$Type('$($PolicyId)')/assign"
+            $null = New-GraphPOSTRequest -uri $uri -tenantid $TenantFilter -type POST -body $AssignJSON
+            if ($ExcludeGroup) {
+                Write-LogMessage -headers $Headers -API $APIName -message "Assigned group '$GroupName' and excluded group '$ExcludeGroup' on Policy $PolicyId" -Sev 'Info' -tenant $TenantFilter
+            } else {
+                Write-LogMessage -headers $Headers -API $APIName -message "Assigned group '$GroupName' on Policy $PolicyId" -Sev 'Info' -tenant $TenantFilter
+            }
+        }
+
+    } catch {
+        $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
+        Write-LogMessage -headers $Headers -API $APIName -message "Failed to assign $GroupName to Policy $PolicyId, using Platform $PlatformType and $Type. The error is:$ErrorMessage" -Sev 'Error' -tenant $TenantFilter -LogData $ErrorMessage
     }
 }

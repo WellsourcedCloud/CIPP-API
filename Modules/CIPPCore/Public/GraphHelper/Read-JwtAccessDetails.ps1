@@ -1,14 +1,7 @@
 function Read-JwtAccessDetails {
     <#
-    .SYNOPSIS
-    Parse Microsoft JWT access tokens
-
-    .DESCRIPTION
-    Extract JWT access token details for verification
-
-    .PARAMETER Token
-    Token to get details for
-
+    .FUNCTIONALITY
+    Internal
     #>
     [cmdletbinding()]
     param(
@@ -25,6 +18,7 @@ function Read-JwtAccessDetails {
         IPAddress         = ''
         Name              = ''
         Scope             = ''
+        Roles             = ''
         TenantId          = ''
         UserPrincipalName = ''
     }
@@ -39,7 +33,7 @@ function Read-JwtAccessDetails {
 
     # Convert base64 to json to object
     $tokenByteArray = [System.Convert]::FromBase64String($tokenPayload)
-    $tokenArray = [System.Text.Encoding]::ASCII.GetString($tokenByteArray)
+    $tokenArray = [System.Text.Encoding]::UTF8.GetString($tokenByteArray)
     $TokenObj = $tokenArray | ConvertFrom-Json
 
     # Convert token details to human readable
@@ -50,6 +44,7 @@ function Read-JwtAccessDetails {
     $TokenDetails.IPAddress = $TokenObj.ipaddr
     $TokenDetails.Name = $TokenObj.name
     $TokenDetails.Scope = $TokenObj.scp -split ' '
+    $TokenDetails.Roles = $TokenObj.roles
     $TokenDetails.TenantId = $TokenObj.tid
     $TokenDetails.UserPrincipalName = $TokenObj.upn
 

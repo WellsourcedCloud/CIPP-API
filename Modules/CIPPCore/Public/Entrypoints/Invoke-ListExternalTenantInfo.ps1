@@ -3,13 +3,15 @@ using namespace System.Net
 Function Invoke-ListExternalTenantInfo {
     <#
     .FUNCTIONALITY
-    Entrypoint
+        Entrypoint
+    .ROLE
+        CIPP.Core.Read
     #>
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
 
-    $APIName = $TriggerMetadata.FunctionName
-    Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME -message 'Accessed this API' -Sev 'Debug'
+    $APIName = $Request.Params.CIPPEndpoint
+    Write-LogMessage -headers $Request.Headers -API $APINAME -message 'Accessed this API' -Sev 'Debug'
 
     # Write to the Azure Functions log stream.
     Write-Host 'PowerShell HTTP trigger function processed a request.'
@@ -58,20 +60,20 @@ Function Invoke-ListExternalTenantInfo {
 
         # Invoke
         $response = Invoke-RestMethod -UseBasicParsing -Method Post -Uri 'https://autodiscover-s.outlook.com/autodiscover/autodiscover.svc' -Body $body -Headers $headers
-    
+
         # Return
         $TenantDomains = $response.Envelope.body.GetFederationInformationResponseMessage.response.Domains.Domain | Sort-Object
     }
 
     $results = [PSCustomObject]@{
         GraphRequest = $GraphRequest
-        Domains      = $TenantDomains
+        Domains      = @($TenantDomains)
     }
 
     # Associate values to output bindings by calling 'Push-OutputBinding'.
     Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
-            StatusCode = $StatusCode 
-            Body       = $results 
+            StatusCode = $StatusCode
+            Body       = $results
         })
 
 }

@@ -4,31 +4,20 @@ function Get-CIPPGeoIPLocation {
         [string]$IP
     )
 
-    if ($IP -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+$') {
-        $IP = $IP -replace ':\d+$', '' # Remove the port number if present
+    $CacheGeoIPTable = Get-CippTable -tablename 'cachegeoip'
+    $30DaysAgo = (Get-Date).AddDays(-30).ToString('yyyy-MM-ddTHH:mm:ssZ')
+    $Filter = "RowKey eq '$IP' and Timestamp ge datetime'$30DaysAgo'"
+    $GeoIP = Get-CippAzDataTableEntity @CacheGeoIPTable -Filter $Filter
+    if ($GeoIP) {
+        return ($GeoIP.Data | ConvertFrom-Json)
     }
-
-    $partitionKey = "GeoIP"
-    $IPAsint = [System.Numerics.BigInteger]::Zero
-    $ipAddress = [System.Net.IPAddress]::Parse($IP)
-    if ($ipAddress.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6) {
-        $partitionKey = "GeoIPv6"
-        $bytes = $ipAddress.GetAddressBytes()
-        for ($i = 0; $i -lt $bytes.Length; $i++) {
-            $IPAsint = $IPAsint -shl 8 -bor $bytes[$i]
-        }
+    $location = Invoke-RestMethod "https://geoipdb.azurewebsites.net/api/GetIPInfo?IP=$IP"
+    if ($location.status -eq 'FAIL') { throw "Could not get location for $IP" }
+    $CacheGeo = @{
+        PartitionKey = 'IP'
+        RowKey       = $IP
+        Data         = [string]($location | ConvertTo-Json -Compress)
     }
-    else {
-        $IP.Split(".") | ForEach-Object {
-            $IPAddressByte = 0
-            [int]::TryParse($_, [ref] $IPAddressByte) | Out-Null
-            $IPAsint = ([long]($IPAsint -shl 8)) -bor [byte]$_
-        }
-    }
-
-    $CTX = New-AzDataTableContext -TableName geoipdb -ConnectionString 'TableEndpoint=https://cyberdraingeoipdb.table.core.windows.net/;SharedAccessSignature=sv=2022-11-02&ss=t&srt=o&sp=rl&se=2025-08-08T21:05:23Z&st=2023-08-08T13:05:23Z&spr=https&sig=89Bmk2Un89xqNzZPLkryFnLRCjHs9rCWGUJjhvf5mso%3D'
-    $GeoTable = @{ Context = $CTX }
-    $location = (Get-CIPPAzDataTableEntity @GeoTable -Filter "PartitionKey eq '$partitionKey' and RowKey le '$IPAsint' and ipTo ge '$IPAsint'") | Select-Object -Last 1
-
+    Add-AzDataTableEntity @CacheGeoIPTable -Entity $CacheGeo -Force
     return $location
 }
